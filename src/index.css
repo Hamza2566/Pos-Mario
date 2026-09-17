@@ -1,0 +1,119 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ── Core Design Tokens ─────────────────────────── */
+    --background: 30 20% 98%;
+    --foreground: 20 14.3% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 20 14.3% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 20 14.3% 10%;
+
+    /* Primary = warm coffee orange */
+    --primary: 24 87% 48%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 30 20% 95%;
+    --secondary-foreground: 20 14.3% 20%;
+    --muted: 30 10% 96%;
+    --muted-foreground: 20 5% 50%;
+    --accent: 30 20% 93%;
+    --accent-foreground: 20 14.3% 15%;
+    --destructive: 0 84.2% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 30 12% 90%;
+    --input: 30 12% 90%;
+    --ring: 24 87% 48%;
+    --radius: 0.625rem;
+
+    /* ── Sidebar ────────────────────────────────────── */
+    --sidebar: 20 18% 12%;
+    --sidebar-foreground: 30 15% 90%;
+    --sidebar-border: 20 12% 18%;
+    --sidebar-accent: 20 12% 18%;
+    --sidebar-accent-foreground: 30 15% 95%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 99px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.4);
+  }
+}
+
+@layer components {
+  /* Sidebar surface */
+  .bg-sidebar          { background-color: hsl(var(--sidebar)); }
+  .border-sidebar-border { border-color: hsl(var(--sidebar-border)); }
+  .bg-sidebar-accent   { background-color: hsl(var(--sidebar-accent)); }
+  .text-sidebar-foreground { color: hsl(var(--sidebar-foreground)); }
+  .text-sidebar-accent-foreground { color: hsl(var(--sidebar-accent-foreground)); }
+
+  /* Touch-friendly POS product card */
+  .pos-product-card {
+    @apply cursor-pointer select-none rounded-xl border border-border bg-card
+           transition-all duration-150 hover:border-primary/30
+           hover:shadow-md active:scale-95 active:shadow-sm;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Hide scrollbar but keep scroll functionality */
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ── Print styles for 80mm thermal receipt ──────────────── */
+@media print {
+  @page {
+    size: 80mm auto;
+    margin: 4mm;
+  }
+
+  /* Hide everything except the receipt */
+  body > *:not(.receipt-print),
+  .print\:hidden {
+    display: none !important;
+  }
+
+  .receipt-print {
+    display: block !important;
+    position: fixed;
+    inset: 0;
+    width: 80mm;
+    font-size: 11px;
+    line-height: 1.5;
+    color: #000;
+    background: #fff;
+  }
+}
