@@ -74,3 +74,25 @@ export interface LocalSale {
   /** Human-readable sale number — populated after successful sync */
   sale_number: string | null
 }
+
+
+export interface LocalDraftItem {
+  product_id: string
+  product_name_snapshot: string
+  unit_price_snapshot: number
+  price_version_used: number
+  quantity: number
+  discount_amount: number
+  subtotal: number
+}
+
+/** Local-only editable draft order (not synced until finalized via complete_sale) */
+export interface LocalDraft {
+  id: string
+  business_id: string
+  items: LocalDraftItem[]
+  discount_amount: number
+  notes: string | null
+  created_at: string
+  updated_at: string
+}

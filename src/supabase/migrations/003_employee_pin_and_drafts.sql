@@ -1,9 +1,159 @@
 -- ============================================================
--- complete_sale.sql
--- Atomic sale transaction RPC (SECURITY DEFINER)
--- Supports optional p_pin for employee attribution
+-- 003_employee_pin_and_drafts.sql
+-- Employee 4-digit PIN + DRAFT sale status + complete_sale PIN
 -- ============================================================
 
+-- ── profiles.pin ─────────────────────────────────────────────
+ALTER TABLE profiles
+  ADD COLUMN IF NOT EXISTS pin text;
+
+ALTER TABLE profiles
+  DROP CONSTRAINT IF EXISTS profiles_pin_format_check;
+
+ALTER TABLE profiles
+  ADD CONSTRAINT profiles_pin_format_check
+  CHECK (pin IS NULL OR pin ~ '^[0-9]{4}$');
+
+CREATE UNIQUE INDEX IF NOT EXISTS profiles_business_pin_unique
+  ON profiles (business_id, pin)
+  WHERE pin IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION generate_unique_employee_pin(p_business_id uuid)
+RETURNS text
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_pin text;
+  v_attempts int := 0;
+BEGIN
+  LOOP
+    v_attempts := v_attempts + 1;
+    IF v_attempts > 200 THEN
+      RAISE EXCEPTION 'PIN_EXHAUSTED: could not allocate unique PIN for business %', p_business_id;
+    END IF;
+
+    v_pin := lpad((floor(random() * 10000))::int::text, 4, '0');
+
+    EXIT WHEN NOT EXISTS (
+      SELECT 1 FROM profiles
+      WHERE business_id = p_business_id AND pin = v_pin
+    );
+  END LOOP;
+
+  RETURN v_pin;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION assign_employee_pin()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.pin IS NULL OR btrim(NEW.pin) = '' THEN
+    NEW.pin := generate_unique_employee_pin(NEW.business_id);
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_assign_employee_pin ON profiles;
+CREATE TRIGGER trg_assign_employee_pin
+BEFORE INSERT OR UPDATE OF pin, business_id ON profiles
+FOR EACH ROW
+EXECUTE FUNCTION assign_employee_pin();
+
+DO $$
+DECLARE
+  r RECORD;
+BEGIN
+  FOR r IN
+    SELECT id, business_id
+    FROM profiles
+    WHERE pin IS NULL
+    ORDER BY created_at
+  LOOP
+    UPDATE profiles
+    SET pin = generate_unique_employee_pin(r.business_id),
+        updated_at = now()
+    WHERE id = r.id;
+  END LOOP;
+END;
+$$;
+
+-- ── Draft status on sales ────────────────────────────────────
+ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_sale_status_check;
+ALTER TABLE sales
+  ADD CONSTRAINT sales_sale_status_check
+  CHECK (sale_status = ANY (ARRAY[
+    'DRAFT'::text,
+    'COMPLETED'::text,
+    'VOIDED'::text,
+    'REFUNDED'::text,
+    'PARTIALLY_REFUNDED'::text
+  ]));
+
+ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_payment_status_check;
+ALTER TABLE sales
+  ADD CONSTRAINT sales_payment_status_check
+  CHECK (payment_status = ANY (ARRAY[
+    'UNPAID'::text,
+    'PAID'::text,
+    'PARTIALLY_PAID'::text,
+    'REFUNDED'::text,
+    'PARTIALLY_REFUNDED'::text
+  ]));
+
+ALTER TABLE sales ALTER COLUMN sale_number DROP NOT NULL;
+
+-- ── Lookup employee by PIN ───────────────────────────────────
+CREATE OR REPLACE FUNCTION lookup_employee_by_pin(
+  p_business_id uuid,
+  p_pin text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_caller profiles%ROWTYPE;
+  v_emp    profiles%ROWTYPE;
+BEGIN
+  SELECT * INTO v_caller
+  FROM profiles
+  WHERE auth_user_id = auth.uid()
+    AND business_id = p_business_id
+    AND active = true;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'UNAUTHORIZED: Caller not an active member of this business';
+  END IF;
+
+  IF p_pin IS NULL OR p_pin !~ '^[0-9]{4}$' THEN
+    RAISE EXCEPTION 'INVALID_PIN: PIN must be exactly 4 digits';
+  END IF;
+
+  SELECT * INTO v_emp
+  FROM profiles
+  WHERE business_id = p_business_id
+    AND pin = p_pin
+    AND active = true;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'INVALID_PIN: No active employee matches this PIN';
+  END IF;
+
+  RETURN jsonb_build_object(
+    'id', v_emp.id,
+    'full_name', v_emp.full_name,
+    'role', v_emp.role
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION lookup_employee_by_pin(uuid, text) TO authenticated;
+
+-- ── complete_sale with optional PIN attribution ──────────────
 DROP FUNCTION IF EXISTS complete_sale(uuid, uuid, uuid, text, jsonb, text, text, numeric, text);
 
 CREATE OR REPLACE FUNCTION complete_sale(
@@ -267,3 +417,4 @@ $$;
 
 GRANT EXECUTE ON FUNCTION complete_sale(uuid, uuid, uuid, text, jsonb, text, text, numeric, text, text) TO authenticated;
 
+NOTIFY pgrst, 'reload schema';

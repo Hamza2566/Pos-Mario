@@ -3,8 +3,8 @@
 
 export type Role = 'OWNER' | 'EMPLOYEE'
 
-export type SaleStatus = 'COMPLETED' | 'VOIDED' | 'REFUNDED' | 'PARTIALLY_REFUNDED'
-export type PaymentStatus = 'PAID' | 'PARTIALLY_PAID' | 'REFUNDED' | 'PARTIALLY_REFUNDED'
+export type SaleStatus = 'DRAFT' | 'COMPLETED' | 'VOIDED' | 'REFUNDED' | 'PARTIALLY_REFUNDED'
+export type PaymentStatus = 'UNPAID' | 'PAID' | 'PARTIALLY_PAID' | 'REFUNDED' | 'PARTIALLY_REFUNDED'
 export type PaymentMethod = 'CASH' | 'TELEBIRR' | 'CBE_BIRR' | 'CARD' | 'OTHER'
 export type InventoryTransactionType =
   | 'PURCHASE'
@@ -37,6 +37,8 @@ export interface Profile {
   role: Role
   phone: string | null
   avatar_url: string | null
+  /** Unique 4-digit PIN within the business — used for sale attribution */
+  pin: string | null
   active: boolean
   created_at: string
   updated_at: string
@@ -183,6 +185,8 @@ export interface CompleteSalePayload {
   p_payment_reference: string | null
   p_sale_discount: number
   p_notes: string | null
+  /** When set, sale is attributed to the employee who owns this PIN */
+  p_pin?: string | null
 }
 
 // ─── Dashboard / Report Types ─────────────────────────────────────────────────
