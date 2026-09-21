@@ -13,6 +13,7 @@ const statusConfig: Record<string, { label: string; className: string }> = {
   SYNCED:     { label: 'Synced',     className: 'bg-emerald-500/15 text-emerald-600 border-emerald-500/30' },
   FAILED:     { label: 'Failed',     className: 'bg-red-500/15 text-red-600 border-red-500/30' },
   // Sale statuses
+  DRAFT:      { label: 'Draft',      className: 'bg-amber-500/15 text-amber-700 border-amber-500/30' },
   PAID:       { label: 'Paid',       className: 'bg-emerald-500/15 text-emerald-600 border-emerald-500/30' },
   COMPLETED:  { label: 'Completed',  className: 'bg-emerald-500/15 text-emerald-600 border-emerald-500/30' },
   REFUNDED:   { label: 'Refunded',   className: 'bg-purple-500/15 text-purple-600 border-purple-500/30' },

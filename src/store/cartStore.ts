@@ -31,6 +31,7 @@ interface CartState {
   decrementItem: (product_id: string) => void
   setDiscount: (amount: number) => void
   clearCart: () => void
+  loadFromDraft: (items: CartItem[], saleDiscount: number) => void
 }
 
 function computeSubtotal(items: CartItem[]): number {
@@ -130,4 +131,12 @@ export const useCartStore = create<CartState>()((set) => ({
     taxTotal: 0,
     grandTotal: 0,
   }),
+
+  loadFromDraft: (items, saleDiscount) => {
+    set({
+      items,
+      saleDiscount,
+      ...deriveTotals(items, saleDiscount),
+    })
+  },
 }))

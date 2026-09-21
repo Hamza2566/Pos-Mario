@@ -4,6 +4,7 @@ import { useAuthStore } from '@/store/authStore'
 import { createSale } from '@/lib/saleService'
 import { formatCurrency } from '@/lib/utils'
 import { Loader2, Banknote, Smartphone, CreditCard, X } from 'lucide-react'
+import { PinModal } from './PinModal'
 import type { LocalSale } from '@/types/local'
 
 const PAYMENT_METHODS = [
@@ -18,9 +19,10 @@ interface PaymentModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onComplete: (sale: LocalSale) => void
+  draftId?: string | null
 }
 
-export function PaymentModal({ open, onOpenChange, onComplete }: PaymentModalProps) {
+export function PaymentModal({ open, onOpenChange, onComplete, draftId }: PaymentModalProps) {
   const { items, grandTotal, discountTotal } = useCartStore()
   const { profile, business } = useAuthStore()
   const [method, setMethod] = useState<string>('CASH')
@@ -28,13 +30,19 @@ export function PaymentModal({ open, onOpenChange, onComplete }: PaymentModalPro
   const [notes, setNotes] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [pinOpen, setPinOpen] = useState(false)
 
   if (!open) return null
 
-  async function handleCharge() {
-    if (!profile || !business) return
+  function handleContinue() {
     setError(null)
+    setPinOpen(true)
+  }
+
+  async function handlePinConfirm(pin: string) {
+    if (!profile || !business) return
     setLoading(true)
+    setError(null)
     try {
       const sale = await createSale({
         items,
@@ -44,10 +52,14 @@ export function PaymentModal({ open, onOpenChange, onComplete }: PaymentModalPro
         notes: notes || null,
         employeeId: profile.id,
         businessId: business.id,
+        pin,
+        draftId: draftId ?? null,
       })
+      setPinOpen(false)
       onComplete(sale)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Payment failed. Please try again.')
+      // Re-throw so PinModal shows the error and clears digits
+      throw err instanceof Error ? err : new Error('Payment failed. Please try again.')
     } finally {
       setLoading(false)
     }
@@ -58,7 +70,7 @@ export function PaymentModal({ open, onOpenChange, onComplete }: PaymentModalPro
       {/* Backdrop */}
       <div
         className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm"
-        onClick={() => !loading && onOpenChange(false)}
+        onClick={() => !loading && !pinOpen && onOpenChange(false)}
       />
 
       {/* Modal */}
@@ -69,7 +81,7 @@ export function PaymentModal({ open, onOpenChange, onComplete }: PaymentModalPro
             <h2 className="text-lg font-bold">Payment</h2>
             <button
               id="payment-close"
-              onClick={() => !loading && onOpenChange(false)}
+              onClick={() => !loading && !pinOpen && onOpenChange(false)}
               className="h-8 w-8 flex items-center justify-center rounded-lg hover:bg-muted transition-colors"
             >
               <X className="h-4 w-4" />
@@ -151,10 +163,10 @@ export function PaymentModal({ open, onOpenChange, onComplete }: PaymentModalPro
               </p>
             )}
 
-            {/* Charge button */}
+            {/* Continue to PIN */}
             <button
               id="payment-charge"
-              onClick={handleCharge}
+              onClick={handleContinue}
               disabled={loading}
               className="w-full flex items-center justify-center gap-2 rounded-xl bg-primary py-3.5 text-base font-bold text-primary-foreground shadow-sm hover:bg-primary/90 disabled:opacity-60 disabled:cursor-not-allowed transition-all active:scale-[0.98]"
             >
@@ -164,12 +176,22 @@ export function PaymentModal({ open, onOpenChange, onComplete }: PaymentModalPro
                   Processing…
                 </>
               ) : (
-                `Charge ${formatCurrency(grandTotal)}`
+                `Continue · ${formatCurrency(grandTotal)}`
               )}
             </button>
+            <p className="text-xs text-center text-muted-foreground">
+              Next: enter the responsible employee&apos;s 4-digit PIN to confirm.
+            </p>
           </div>
         </div>
       </div>
+
+      <PinModal
+        open={pinOpen}
+        onOpenChange={setPinOpen}
+        onConfirm={handlePinConfirm}
+        confirmLabel={`Confirm & charge ${formatCurrency(grandTotal)}`}
+      />
     </>
   )
 }

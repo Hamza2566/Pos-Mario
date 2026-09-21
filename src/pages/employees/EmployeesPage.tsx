@@ -25,6 +25,7 @@ interface Employee {
   phone: string | null
   active: boolean
   auth_user_id: string
+  pin: string | null
   email?: string
 }
 
@@ -46,7 +47,7 @@ export function EmployeesPage() {
     setLoading(true)
     const { data } = await supabase
       .from('profiles')
-      .select('id, full_name, phone, active, auth_user_id')
+      .select('id, full_name, phone, active, auth_user_id, pin')
       .eq('business_id', business!.id)
       .eq('role', 'EMPLOYEE')
       .order('full_name')
@@ -88,12 +89,13 @@ export function EmployeesPage() {
           phone: values.phone || null,
           role: 'EMPLOYEE',
           active: true,
+          // pin omitted — DB trigger auto-generates a unique 4-digit PIN
         }, { onConflict: 'auth_user_id' })
       }
 
       reset()
       setFormOpen(false)
-      load()
+      await load()
     } catch (err) {
       setServerError(err instanceof Error ? err.message : 'Failed to create employee.')
     }
@@ -116,7 +118,7 @@ export function EmployeesPage() {
     <div className="p-6 space-y-6 max-w-4xl mx-auto">
       <PageHeader
         title="Employees"
-        description="Manage your team members"
+        description="Manage your team members. Each employee gets a unique 4-digit PIN for order attribution."
         icon={Users}
         action={
           <button id="employees-add" onClick={() => { setFormOpen(true); setServerError(null); reset() }} className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors">
@@ -136,6 +138,7 @@ export function EmployeesPage() {
               <tr className="border-b border-border bg-muted/30 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
                 <th className="px-4 py-3 text-left">Name</th>
                 <th className="px-4 py-3 text-left">Phone</th>
+                <th className="px-4 py-3 text-center">PIN</th>
                 <th className="px-4 py-3 text-center">Status</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
@@ -152,6 +155,15 @@ export function EmployeesPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">{emp.phone ?? '—'}</td>
+                  <td className="px-4 py-3 text-center">
+                    <span
+                      id={`emp-pin-${emp.id}`}
+                      className="inline-flex items-center rounded-md bg-muted px-2.5 py-1 font-mono text-sm font-semibold tracking-[0.2em] tabular-nums"
+                      title="Employee sale PIN"
+                    >
+                      {emp.pin ?? '————'}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 text-center">
                     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${
                       emp.active ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' : 'bg-slate-500/10 text-slate-500 border-slate-500/20'
