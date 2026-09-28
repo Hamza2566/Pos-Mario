@@ -7,7 +7,8 @@ import { EmptyState } from '@/components/shared/EmptyState'
 import { LoadingSpinner } from '@/components/shared/LoadingSpinner'
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog'
 import { formatCurrency } from '@/lib/utils'
-import { Package, Plus, Pencil, ToggleLeft, ToggleRight, Search } from 'lucide-react'
+import { Package, Plus, Pencil, ToggleLeft, ToggleRight, Search, CookingPot } from 'lucide-react'
+import { RecipeEditor } from '@/components/products/RecipeEditor'
 
 interface Product {
   id: string
@@ -28,6 +29,7 @@ export function ProductsPage() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [toggleTarget, setToggleTarget] = useState<Product | null>(null)
+  const [recipeTarget, setRecipeTarget] = useState<Product | null>(null)
 
   useEffect(() => { if (business) loadProducts() }, [business])
 
@@ -55,7 +57,7 @@ export function ProductsPage() {
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
       <PageHeader
         title="Products"
-        description="Manage your product catalog"
+        description="Manage products and ingredient recipes"
         icon={Package}
         action={
           <button
@@ -130,6 +132,9 @@ export function ProductsPage() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-end gap-1">
+                      <button onClick={() => setRecipeTarget(product)} title="Manage recipe" className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs hover:bg-muted">
+                        <CookingPot className="h-3.5 w-3.5" /> Recipe
+                      </button>
                       <button
                         id={`product-edit-${product.id}`}
                         onClick={() => navigate(`/products/${product.id}/edit`)}
@@ -162,6 +167,7 @@ export function ProductsPage() {
         variant={toggleTarget?.active ? 'destructive' : 'default'}
         onConfirm={handleToggleActive}
       />
+      {recipeTarget && <RecipeEditor product={recipeTarget} onClose={() => setRecipeTarget(null)} />}
     </div>
   )
 }
