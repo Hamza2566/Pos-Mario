@@ -2,17 +2,20 @@ import { useState } from 'react'
 import { useCartStore } from '@/store/cartStore'
 import { CartItem } from './CartItem'
 import { formatCurrency } from '@/lib/utils'
-import { ShoppingCart, Trash2, Tag } from 'lucide-react'
+import { ShoppingCart, Trash2, Tag, FileText, Loader2 } from 'lucide-react'
 import { EmptyState } from '@/components/shared/EmptyState'
 
 interface CartProps {
   onCheckout: () => void
+  onSaveDraft: () => Promise<void> | void
+  activeDraftId?: string | null
 }
 
-export function Cart({ onCheckout }: CartProps) {
+export function Cart({ onCheckout, onSaveDraft, activeDraftId }: CartProps) {
   const { items, subtotal, discountTotal, taxTotal, grandTotal, clearCart, setDiscount } = useCartStore()
   const [discountInput, setDiscountInput] = useState('')
   const [discountMode, setDiscountMode] = useState<'percent' | 'fixed'>('fixed')
+  const [savingDraft, setSavingDraft] = useState(false)
 
   const itemCount = items.reduce((sum, i) => sum + i.quantity, 0)
 
@@ -27,6 +30,15 @@ export function Cart({ onCheckout }: CartProps) {
     }
   }
 
+  async function handleSaveDraft() {
+    setSavingDraft(true)
+    try {
+      await onSaveDraft()
+    } finally {
+      setSavingDraft(false)
+    }
+  }
+
   return (
     <div className="flex h-full flex-col bg-card">
       {/* Header */}
@@ -34,7 +46,7 @@ export function Cart({ onCheckout }: CartProps) {
         <div className="flex items-center gap-2">
           <ShoppingCart className="h-4 w-4 text-primary" />
           <h2 className="text-sm font-semibold">
-            Cart
+            {activeDraftId ? 'Editing draft' : 'Cart'}
             {itemCount > 0 && (
               <span className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold">
                 {itemCount}
@@ -126,15 +138,25 @@ export function Cart({ onCheckout }: CartProps) {
             </div>
           </div>
 
-          {/* Checkout */}
-          <button
-            id="cart-checkout"
-            onClick={onCheckout}
-            disabled={items.length === 0}
-            className="w-full rounded-xl bg-primary py-3.5 text-sm font-bold text-primary-foreground shadow-sm hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98]"
-          >
-            Charge {formatCurrency(grandTotal)}
-          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              id="cart-save-draft"
+              onClick={handleSaveDraft}
+              disabled={items.length === 0 || savingDraft}
+              className="flex items-center justify-center gap-1.5 rounded-xl border border-border bg-background py-3 text-sm font-semibold hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+            >
+              {savingDraft ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+              {activeDraftId ? 'Update draft' : 'Save draft'}
+            </button>
+            <button
+              id="cart-checkout"
+              onClick={onCheckout}
+              disabled={items.length === 0}
+              className="rounded-xl bg-primary py-3 text-sm font-bold text-primary-foreground shadow-sm hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98]"
+            >
+              Charge
+            </button>
+          </div>
         </div>
       )}
     </div>

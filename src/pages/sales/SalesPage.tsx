@@ -8,9 +8,9 @@ import { EmptyState } from '@/components/shared/EmptyState'
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog'
 import { formatCurrency, formatDateTime, PAYMENT_METHOD_LABELS } from '@/lib/utils'
 import { db } from '@/lib/db'
-import { voidSale } from '@/lib/saleService'
+import { voidSale, listDrafts } from '@/lib/saleService'
 import { Receipt, X } from 'lucide-react'
-import type { LocalSale } from '@/types/local'
+import type { LocalDraft, LocalSale } from '@/types/local'
 
 interface Sale {
   id: string
@@ -45,6 +45,7 @@ export function SalesPage() {
   const [voidTarget, setVoidTarget] = useState<Sale | null>(null)
   const [voiding, setVoiding] = useState(false)
   const [localPending, setLocalPending] = useState<LocalSale[]>([])
+  const [localDrafts, setLocalDrafts] = useState<LocalDraft[]>([])
 
   useEffect(() => {
     if (!business) return
@@ -91,6 +92,7 @@ export function SalesPage() {
       .anyOf(['PENDING', 'SYNCING', 'FAILED'])
       .toArray()
     setLocalPending(pending.filter(s => s.business_id === business!.id))
+    setLocalDrafts(await listDrafts(business!.id))
     setLoading(false)
   }
 
@@ -141,6 +143,27 @@ export function SalesPage() {
           </button>
         ))}
       </div>
+
+      {localDrafts.length > 0 && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm">
+          <div className="flex items-center gap-2">
+            <p className="font-semibold text-amber-800">Draft orders on this device ({localDrafts.length})</p>
+            <StatusBadge status="DRAFT" />
+          </div>
+          <p className="text-amber-700 text-xs mt-1">Open POS to review, edit, enter PIN, and charge. Drafts are not finalized sales.</p>
+          <ul className="mt-2 space-y-1 text-amber-900">
+            {localDrafts.map(draft => {
+              const total = draft.items.reduce((s, i) => s + i.subtotal, 0) - draft.discount_amount
+              return (
+                <li key={draft.id} className="flex justify-between gap-3">
+                  <span>{formatDateTime(draft.updated_at)} · {draft.items.length} item(s)</span>
+                  <span className="font-semibold tabular-nums">{formatCurrency(Math.max(total, 0))}</span>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      )}
 
       {localPending.length > 0 && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm">

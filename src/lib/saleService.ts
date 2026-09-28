@@ -2,19 +2,23 @@ import { v4 as uuidv4 } from 'uuid'
 import { db } from '@/lib/db'
 import { supabase } from '@/lib/supabase'
 import { getDeviceId, multiplyDecimals, subtractDecimals } from '@/lib/utils'
-import { syncPendingSales } from '@/lib/syncEngine'
 import type { CartItem } from '@/store/cartStore'
-import type { LocalSale } from '@/types/local'
+import type { LocalSale, LocalDraft } from '@/types/local'
 
 
 export interface CreateSaleInput {
   businessId: string
+  /** Fallback employee id (used offline / when PIN already resolved) */
   employeeId: string
   items: CartItem[]
   discountAmount: number
   paymentMethod: string
   paymentReference: string | null
   notes: string | null
+  /** 4-digit PIN — sale is attributed to the matching employee */
+  pin: string
+  /** When finalizing a local draft, pass its id so it can be removed after success */
+  draftId?: string | null
 }
 
 
@@ -35,13 +39,38 @@ export interface CreateSaleInput {
  * - A UUID is generated before saving. The same UUID is sent to the RPC.
  * - If the network request times out and is retried, the RPC's existence
  *   check prevents duplicate records.
+ *
+ * PIN ATTRIBUTION:
+ * - Online: p_pin is sent to complete_sale which resolves the responsible employee
+ * - Offline: PIN is validated via lookup_employee_by_pin when online is required for
+ *   first attribution; if already resolved, employeeId is stored for later sync
  */
 export async function createSale(input: CreateSaleInput): Promise<LocalSale> {
   const saleId = uuidv4()
   const deviceId = getDeviceId()
   const now = new Date().toISOString()
 
-  // Build local sale items with price snapshots captured NOW
+  if (!/^\d{4}$/.test(input.pin)) {
+    throw new Error('PIN must be exactly 4 digits')
+  }
+
+  let responsibleEmployeeId = input.employeeId
+
+  // Prefer online PIN lookup so local record stores the correct employee
+  if (navigator.onLine) {
+    const { data: emp, error: pinErr } = await supabase.rpc('lookup_employee_by_pin', {
+      p_business_id: input.businessId,
+      p_pin: input.pin,
+    })
+    if (pinErr) {
+      const msg = pinErr.message || 'Invalid PIN'
+      throw new Error(msg.includes('INVALID_PIN') ? 'Invalid PIN' : msg)
+    }
+    const resolved = emp as { id?: string } | null
+    if (!resolved?.id) throw new Error('Invalid PIN')
+    responsibleEmployeeId = resolved.id
+  }
+
   const localItems = input.items.map((item) => ({
     product_id: item.product_id,
     product_name_snapshot: item.product_name,
@@ -61,7 +90,7 @@ export async function createSale(input: CreateSaleInput): Promise<LocalSale> {
   const localSale: LocalSale = {
     id: saleId,
     business_id: input.businessId,
-    employee_id: input.employeeId,
+    employee_id: responsibleEmployeeId,
     device_id: deviceId,
     items: localItems,
     subtotal,
@@ -79,15 +108,13 @@ export async function createSale(input: CreateSaleInput): Promise<LocalSale> {
     sale_number: null,
   }
 
-  // Step 1: Always save locally first
   await db.sales.add(localSale)
 
-  // Step 2: If online, attempt immediate sync
   if (navigator.onLine) {
     try {
       const { data, error } = await supabase.rpc('complete_sale', {
         p_sale_id: saleId,
-        p_employee_id: input.employeeId,
+        p_employee_id: responsibleEmployeeId,
         p_business_id: input.businessId,
         p_device_id: deviceId,
         p_items: input.items.map((item) => ({
@@ -99,22 +126,31 @@ export async function createSale(input: CreateSaleInput): Promise<LocalSale> {
         p_payment_reference: input.paymentReference,
         p_sale_discount: input.discountAmount,
         p_notes: input.notes,
+        p_pin: input.pin,
       })
 
       if (error) throw error
 
-      // Update local record to SYNCED with server-assigned sale_number
       await db.sales.update(saleId, {
         sync_status: 'SYNCED',
         sync_error: null,
         sale_number: (data as { sale_number: string })?.sale_number ?? null,
+        employee_id: (data as { employee_id?: string })?.employee_id ?? responsibleEmployeeId,
       })
+
+      if (input.draftId) {
+        await db.drafts.delete(input.draftId)
+      }
 
       const syncedSale = await db.sales.get(saleId)
       return syncedSale!
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Sync failed'
-      // Sale is saved locally — sync engine will retry
+      // Surface PIN errors to the UI instead of silently queuing
+      if (errorMessage.includes('INVALID_PIN') || errorMessage.toLowerCase().includes('invalid pin')) {
+        await db.sales.delete(saleId)
+        throw new Error('Invalid PIN')
+      }
       await db.sales.update(saleId, {
         sync_status: 'FAILED',
         sync_attempts: 1,
@@ -122,14 +158,18 @@ export async function createSale(input: CreateSaleInput): Promise<LocalSale> {
         sync_error: errorMessage,
       })
 
+      if (input.draftId) {
+        await db.drafts.delete(input.draftId)
+      }
+
       const failedSale = await db.sales.get(saleId)
       return failedSale!
     }
   }
 
-  // Offline: trigger sync engine to pick it up when connectivity returns
-  syncPendingSales().catch(() => {})
-  return localSale
+  // Offline path: PIN must be validated against Supabase
+  await db.sales.delete(saleId)
+  throw new Error('PIN validation requires an internet connection to confirm the sale.')
 }
 
 export async function voidSale(saleId: string, reason?: string): Promise<void> {
@@ -138,4 +178,86 @@ export async function voidSale(saleId: string, reason?: string): Promise<void> {
     p_reason: reason ?? null,
   })
   if (error) throw error
+}
+
+export async function saveDraft(input: {
+  businessId: string
+  items: CartItem[]
+  discountAmount: number
+  notes?: string | null
+  draftId?: string | null
+}): Promise<LocalDraft> {
+  if (input.items.length === 0) {
+    throw new Error('Cannot save an empty draft')
+  }
+
+  const now = new Date().toISOString()
+  const items = input.items.map((item) => ({
+    product_id: item.product_id,
+    product_name_snapshot: item.product_name,
+    unit_price_snapshot: item.unit_price,
+    price_version_used: item.price_version,
+    quantity: item.quantity,
+    discount_amount: item.discount_amount,
+    subtotal: subtractDecimals(
+      multiplyDecimals(item.unit_price, item.quantity),
+      item.discount_amount
+    ),
+  }))
+
+  if (input.draftId) {
+    const existing = await db.drafts.get(input.draftId)
+    if (existing) {
+      const updated: LocalDraft = {
+        ...existing,
+        items,
+        discount_amount: input.discountAmount,
+        notes: input.notes ?? existing.notes,
+        updated_at: now,
+      }
+      await db.drafts.put(updated)
+      return updated
+    }
+  }
+
+  const draft: LocalDraft = {
+    id: uuidv4(),
+    business_id: input.businessId,
+    items,
+    discount_amount: input.discountAmount,
+    notes: input.notes ?? null,
+    created_at: now,
+    updated_at: now,
+  }
+  await db.drafts.add(draft)
+  return draft
+}
+
+export async function listDrafts(businessId: string): Promise<LocalDraft[]> {
+  return db.drafts
+    .where('business_id')
+    .equals(businessId)
+    .reverse()
+    .sortBy('updated_at')
+}
+
+export async function deleteDraft(draftId: string): Promise<void> {
+  await db.drafts.delete(draftId)
+}
+
+export async function lookupEmployeeByPin(
+  businessId: string,
+  pin: string,
+): Promise<{ id: string; full_name: string; role: string }> {
+  const { data, error } = await supabase.rpc('lookup_employee_by_pin', {
+    p_business_id: businessId,
+    p_pin: pin,
+  })
+  if (error) {
+    const msg = error.message || 'Invalid PIN'
+    throw new Error(msg.includes('INVALID_PIN') ? 'Invalid PIN' : msg)
+  }
+  const emp = data as { id: string; full_name: string; role: string } | null
+  if (!emp?.id) throw new Error('Invalid PIN')
+  return emp
 }
