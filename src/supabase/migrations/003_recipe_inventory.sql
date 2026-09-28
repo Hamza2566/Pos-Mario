@@ -1,7 +1,54 @@
+-- Recipe based inventory consumption. Apply after the initial schema.
+CREATE TABLE product_recipes (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id uuid NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+  product_id uuid NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  inventory_item_id uuid NOT NULL REFERENCES inventory_items(id),
+  quantity_per_product numeric(12,3) NOT NULL CHECK (quantity_per_product > 0),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (product_id, inventory_item_id)
+);
+CREATE INDEX idx_product_recipes_product ON product_recipes(product_id);
+CREATE INDEX idx_product_recipes_inventory ON product_recipes(inventory_item_id);
+ALTER TABLE product_recipes ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Auth users see own business recipes" ON product_recipes
+  FOR SELECT USING (business_id = auth_business_id());
+CREATE POLICY "Owners manage own business recipes" ON product_recipes
+  FOR ALL USING (business_id = auth_business_id() AND auth_role() = 'OWNER')
+  WITH CHECK (business_id = auth_business_id() AND auth_role() = 'OWNER');
+
+CREATE OR REPLACE FUNCTION save_product_recipe(p_product_id uuid, p_items jsonb)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE v_item jsonb; v_inventory_id uuid; v_quantity numeric(12,3);
+BEGIN
+  IF auth_role() IS DISTINCT FROM 'OWNER' THEN RAISE EXCEPTION 'UNAUTHORIZED'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM products WHERE id = p_product_id AND business_id = auth_business_id()) THEN
+    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+  END IF;
+  IF p_items IS NULL OR jsonb_typeof(p_items) <> 'array' THEN RAISE EXCEPTION 'INVALID_RECIPE'; END IF;
+  IF (SELECT count(*) FROM jsonb_array_elements(p_items)) <>
+     (SELECT count(DISTINCT value->>'inventory_item_id') FROM jsonb_array_elements(p_items)) THEN
+    RAISE EXCEPTION 'DUPLICATE_INGREDIENT';
+  END IF;
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    v_inventory_id := (v_item->>'inventory_item_id')::uuid;
+    v_quantity := (v_item->>'quantity_per_product')::numeric;
+    IF v_quantity <= 0 OR NOT EXISTS (
+      SELECT 1 FROM inventory_items WHERE id = v_inventory_id AND business_id = auth_business_id() AND active = true
+    ) THEN RAISE EXCEPTION 'INVALID_INGREDIENT'; END IF;
+  END LOOP;
+  DELETE FROM product_recipes WHERE product_id = p_product_id AND business_id = auth_business_id();
+  INSERT INTO product_recipes (business_id, product_id, inventory_item_id, quantity_per_product)
+  SELECT auth_business_id(), p_product_id, (value->>'inventory_item_id')::uuid,
+    (value->>'quantity_per_product')::numeric FROM jsonb_array_elements(p_items);
+END;
+$$;
+GRANT EXECUTE ON FUNCTION save_product_recipe(uuid, jsonb) TO authenticated;
+
 -- ============================================================
 -- complete_sale.sql
 -- Atomic sale transaction RPC (SECURITY DEFINER)
--- This function requires product_recipes from migration 003_recipe_inventory.sql.
+-- Run after the base schema and before deploying the updated POS application.
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION complete_sale(
@@ -176,14 +223,16 @@ BEGIN
           RAISE EXCEPTION 'INACTIVE_INGREDIENT: % is inactive', v_recipe.name;
         END IF;
         v_needed := v_recipe.quantity_per_product * (v_row->>'quantity')::int;
-        UPDATE inventory_items SET quantity = quantity - v_needed, updated_at = now()
+        UPDATE inventory_items
+        SET quantity = quantity - v_needed, updated_at = now()
         WHERE id = v_recipe.inventory_item_id;
         INSERT INTO inventory_transactions (business_id, item_id, transaction_type, quantity_change, reference_id, created_by)
         VALUES (p_business_id, v_recipe.inventory_item_id, 'SALE', -v_needed, p_sale_id, p_employee_id);
       END LOOP;
     ELSIF COALESCE((v_row->>'track_inventory')::boolean, false) THEN
-      -- Compatibility for products that still use the original one-item setup.
-      UPDATE inventory_items SET quantity = quantity - (v_row->>'quantity')::int, updated_at = now()
+      -- Keep legacy unit-stock products working until they are given a recipe.
+      UPDATE inventory_items
+      SET quantity = quantity - (v_row->>'quantity')::int, updated_at = now()
       WHERE business_id = p_business_id AND name = v_row->>'product_name' AND active = true;
       INSERT INTO inventory_transactions (business_id, item_id, transaction_type, quantity_change, reference_id, created_by)
       SELECT p_business_id, ii.id, 'SALE', -((v_row->>'quantity')::int), p_sale_id, p_employee_id
